@@ -1,0 +1,178 @@
+---
+title: "Practical Machine Learning Week 4 Final Project"
+author: "Joseph S. Tabadero, Jr."
+date: "October 7, 2017"
+output: 
+  html_document:
+    keep_md: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+```
+
+# Introduction
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+## Data
+
+The training data for this project are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har.
+
+## Objective
+
+The goal of your project is to predict the manner in which they did the exercise. This is the “classe” variable in the training set. 
+
+# Downloading the Data Set
+
+```{r}
+# Download the training and test sets
+if(!file.exists("pml-training.csv")){
+trainingUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(trainingUrl, destfile = "pml-training.csv", method="curl")
+download.file(testUrl, destfile = "pml-testing.csv", method="curl")
+}
+
+# import the data sets
+training <- read.csv("pml-training.csv")
+testing <- read.csv("pml-testing.csv")
+dim(training)
+
+```
+
+## Data Transformation
+
+```{r}
+# loading the required packages
+library(lubridate)
+library(caret)
+```
+
+
+```{r}
+training$cvtd_timestamp <- as.Date(training$cvtd_timestamp, format = "%m/%d/%Y %H:%M")
+training$weekday <- weekdays(training$cvtd_timestamp)
+training$weekdayf <- factor(training$weekday)
+```
+
+## Exploratory Data Analysis
+
+```{r}
+table(training$classe) 
+prop.table(table(training$classe))
+prop.table(table(training$user_name))
+
+ggplot(training, aes(weekday)) +
+  geom_bar() +
+  facet_wrap(~classe, ncol = 3)
+
+```
+
+## Data Cleaning
+
+```{r}
+## Remove columns with missing values
+training <- training[, colSums(is.na(training)) == 0]
+testing <- testing[, colSums(is.na(testing)) == 0] 
+
+## Remove columns that are not relevant to accelerometer measurements.
+classe<- training$classe
+trainRemove<- grepl("^X|timestamp|window", names(training))
+training2 <- training[, !trainRemove]
+trainCleaned<- training2[, sapply(training2, is.numeric)]
+trainCleaned$classe<- classe
+testRemove<- grepl("^X|timestamp|window", names(testing))
+testing2 <- testing[, !testRemove]
+testCleaned<- training2[, sapply(testing2, is.numeric)]
+testCleaned <- testCleaned[, c(names(intersect(trainCleaned, testCleaned)))]
+dim(trainCleaned)
+```
+We now have 52 predictors left from the original 91 predictors. This still seem to be a lot, but we already have a sizeable reduction from the original.
+
+
+## Create a partition of the training data set for training models
+
+```{r}
+set.seed(626)
+library(caret)
+inTrain <- createDataPartition(trainCleaned$classe, p=0.70, list=F)
+trainData <- trainCleaned[inTrain, ]
+testData <- trainCleaned[-inTrain, ]
+```
+
+## Modeling
+
+Here I consider decision trees, random forests, and generalized boosted regression, with 5 cross-validations. I shall choose the best model by comparing the in-sample predictive accuracy.
+
+### Decision Trees
+
+```{r}
+fitControl <- trainControl(## 10-fold CV
+                           method = "cv",
+                           number = 5)
+dtmod <- train(classe~., data=trainData, method="rpart", trControl=fitControl)
+dtmod
+```
+
+```{r}
+predictiondt <- predict(dtmod, testData)
+cmdt <- confusionMatrix(predictiondt, testData$classe)
+cmdt
+```
+
+### Random Forests
+
+```{r}
+controlRf <- trainControl(method="cv", 5)
+rfmod<- train(classe ~., data=trainData, method="rf", trControl=controlRf, importance=TRUE, ntree=100)
+rfmod
+```
+
+```{r}
+predictionRf <- predict(rfmod, testData)
+cmRf <- confusionMatrix(predictionRf, testData$classe)
+cmRf
+```
+
+### GBM
+
+
+```{r}
+fitControl <- trainControl(## 10-fold CV
+                           method = "cv",
+                           number = 5)
+gbmod <- train(classe~., data=trainData, method="gbm",
+               trControl = fitControl,
+               verbose = FALSE)
+```
+
+```{r}
+gbmod
+```
+
+```{r}
+predictiongb <- predict(gbmod, testData)
+cmgb <- confusionMatrix(predictiongb, testData$classe)
+cmgb
+```
+
+
+# Conclusion
+
+Random Forests gave the highest accuracy (99.39%) when compared to decision trees and generalized boosted regression. The expected out-of-sample error using random forests is 0.61%.
+
+# Predicting on out-of-sample validation set
+
+```{r}
+prediction <- predict(rfmod, testing)
+prediction
+write.table(prediction, "predictions.txt", row.names = FALSE, col.names = FALSE)
+```
+
